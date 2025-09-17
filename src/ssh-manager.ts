@@ -8,6 +8,21 @@ export class SSHManager {
     try {
       const ssh = new NodeSSH();
 
+      // Add SSH event listeners for debugging
+      ssh.connection?.on("error", (e: Error) => {
+        console.error(`SSH error for session ${sessionId}:`, e);
+      });
+
+      ssh.connection?.on("end", () => {
+        console.warn(`SSH end for session ${sessionId}`);
+      });
+
+      ssh.connection?.on("close", (hadErr: boolean) => {
+        console.warn(`SSH close for session ${sessionId}, hadErr:`, hadErr);
+      });
+
+      console.log(`Attempting SSH connection for session ${sessionId}...`);
+
       // Connect to SSH server
       await ssh.connect({
         host: config.host,
@@ -18,7 +33,11 @@ export class SSHManager {
         passphrase: config.passphrase,
         readyTimeout: 30000,
         tryKeyboard: true,
+        keepaliveInterval: 15000,
+        keepaliveCountMax: 4,
       });
+
+      console.log(`SSH connection successful for session ${sessionId}`);
 
       const session: SSHSession = {
         id: sessionId,
@@ -40,15 +59,28 @@ export class SSHManager {
     }
 
     try {
+      console.log(`Requesting shell for session ${sessionId} with dimensions ${cols}x${rows}`);
       const shell = await session.connection.requestShell({
         cols,
         rows,
         term: 'xterm-256color',
       });
 
+      // Add shell stream event listeners
+      shell.on("error", (e: Error) => {
+        console.error(`SSH stream error for session ${sessionId}:`, e);
+      });
+
+      shell.on("close", (code: number | null, signal: string | null) => {
+        console.warn(`Shell closed for session ${sessionId}:`, { code, signal });
+      });
+
       session.shell = shell;
+      console.log(`Shell successfully created for session ${sessionId}`);
+
       return shell;
     } catch (error) {
+      console.error(`Failed to create shell for session ${sessionId}:`, error);
       throw new Error(`Failed to create shell: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }

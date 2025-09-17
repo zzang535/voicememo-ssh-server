@@ -18,7 +18,7 @@ RUN npm run build
 RUN npm ci --only=production && npm cache clean --force
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8001
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs

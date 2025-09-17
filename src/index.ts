@@ -3,11 +3,26 @@ import { createServer } from 'http';
 import { SSHManager } from './ssh-manager';
 import { SSHMessage, SSHResponse } from './types';
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8001;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
 // Create HTTP server
 const server = createServer();
+
+// Add HTTP server error handling
+server.on("clientError", (err, socket) => {
+  console.error("HTTP clientError:", err);
+  if (socket.writable) {
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+  }
+});
+
+server.on("close", () => {
+  console.warn("HTTP server closed");
+});
+
+server.keepAliveTimeout = 75_000;
+server.headersTimeout = 80_000;
 
 // Create WebSocket server
 const wss = new WebSocket.Server({
@@ -20,20 +35,58 @@ const wss = new WebSocket.Server({
 
 const sshManager = new SSHManager();
 
+// WebSocket ping/pong keepalive
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    }
+  });
+}, 30000); // 30초마다 ping
+
 // Generate unique session ID
 function generateSessionId(): string {
   return Math.random().toString(36).substring(2) + Date.now().toString(36);
 }
 
-wss.on('connection', (ws: WebSocket) => {
-  console.log('New WebSocket connection established');
+wss.on('connection', (ws: WebSocket, req) => {
+  console.log('WS connected', {
+    ip: req.socket.remoteAddress,
+    ua: req.headers['user-agent'],
+    origin: req.headers.origin
+  });
 
   let sessionId: string | null = null;
 
+  // Add WebSocket event listeners for debugging
+  ws.on("error", (err) => {
+    console.error("WS error:", err);
+    if (sessionId) {
+      console.error(`WS error for session ${sessionId}:`, err);
+    }
+  });
+
+  ws.on("close", (code, reason) => {
+    console.warn("WS close:", {
+      code,
+      reason: reason?.toString(),
+      sessionId,
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // Send response to client
   const sendResponse = (response: SSHResponse) => {
+    console.log(`Attempting to send response: ${response.type} (WebSocket state: ${ws.readyState})`);
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(response));
+      try {
+        ws.send(JSON.stringify(response));
+        console.log(`Successfully sent response: ${response.type}`);
+      } catch (error) {
+        console.error(`Failed to send response: ${response.type}`, error);
+      }
+    } else {
+      console.warn(`Cannot send response ${response.type}: WebSocket not open (state: ${ws.readyState})`);
     }
   };
 
@@ -51,25 +104,39 @@ wss.on('connection', (ws: WebSocket) => {
 
           try {
             sessionId = generateSessionId();
-            console.log(`Creating SSH session: ${sessionId}`);
+            console.log(`Creating SSH session: ${sessionId} to ${message.config.username}@${message.config.host}:${message.config.port}`);
 
             const session = await sshManager.createSession(sessionId, message.config);
+            console.log(`SSH connection established for session: ${sessionId}`);
+
             const shell = await sshManager.createShell(sessionId, 80, 24);
+            console.log(`Shell created for session: ${sessionId}`);
 
             // Handle shell data output
             shell.on('data', (data: Buffer) => {
-              sendResponse({
-                type: 'data',
-                data: data.toString(),
-              });
+              const dataStr = data.toString();
+              console.log(`Shell data for session ${sessionId}: ${dataStr.substring(0, 100)}...`);
+
+              // Check WebSocket state before sending
+              if (ws.readyState === WebSocket.OPEN) {
+                sendResponse({
+                  type: 'data',
+                  data: dataStr,
+                });
+              } else {
+                console.warn(`WebSocket not open (state: ${ws.readyState}) when trying to send data for session ${sessionId}`);
+              }
             });
 
-            // Handle shell close
-            shell.on('close', () => {
-              console.log(`Shell closed for session: ${sessionId}`);
-              sendResponse({ type: 'disconnected' });
-              if (sessionId) {
-                sshManager.closeSession(sessionId);
+            // Handle shell close - don't close WebSocket immediately
+            shell.on('close', (code: number | null, signal: string | null) => {
+              console.log(`Shell closed for session: ${sessionId} (code: ${code}, signal: ${signal})`);
+              // Only close if it's an unexpected closure or error
+              if (code !== 0 && code !== null) {
+                sendResponse({ type: 'disconnected' });
+                if (sessionId) {
+                  sshManager.closeSession(sessionId);
+                }
               }
             });
 
@@ -80,9 +147,13 @@ wss.on('connection', (ws: WebSocket) => {
                 type: 'error',
                 error: error.message,
               });
+              // Close session on shell error
+              if (sessionId) {
+                sshManager.closeSession(sessionId);
+              }
             });
 
-            sendResponse({ type: 'connected' });
+            sendResponse({ type: 'connected', sessionId });
             console.log(`SSH session ${sessionId} connected successfully`);
 
           } catch (error) {

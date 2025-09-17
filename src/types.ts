@@ -20,6 +20,7 @@ export interface SSHResponse {
   type: 'connected' | 'data' | 'error' | 'disconnected';
   data?: any;
   error?: string;
+  sessionId?: string;
 }
 
 export interface SSHSession {
