@@ -1,0 +1,23 @@
+{
+  "name": "voicememo-ssh-server",
+  "version": "1.0.0",
+  "description": "SSH WebSocket server for VoiceMemo terminal",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "node-ssh": "^13.2.0",
+    "ws": "^8.14.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "@types/ws": "^8.5.8",
+    "@types/cors": "^2.8.14",
+    "tsx": "^3.14.0",
+    "typescript": "^5.2.2"
+  }
+}
